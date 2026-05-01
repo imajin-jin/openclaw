@@ -11,6 +11,7 @@
 
 import { readFile } from "node:fs/promises";
 import type { ImajinClient } from "./client.js";
+import type { ImajinChat } from "./chat.js";
 
 type ToolContent = { type: "text"; text: string };
 type ToolResult = {
@@ -391,4 +392,103 @@ const EXT_MIME: Record<string, string> = {
 function guessMime(filename: string): string {
   const ext = filename.toLowerCase().match(/\.[a-z0-9]+$/)?.[0] ?? "";
   return EXT_MIME[ext] || "application/octet-stream";
+}
+
+// --- Chat tool ---
+
+export function createChatTool(chat: ImajinChat) {
+  return {
+    name: "imajin_chat",
+    label: "Imajin Chat",
+    description:
+      "Send and receive messages on the Imajin network. " +
+      "Actions: send_dm (send a direct message to a DID or handle), " +
+      "get_dms (get recent DMs with a specific person), " +
+      "list_conversations (list all conversations), " +
+      "send (send to any conversation DID), " +
+      "get_messages (get messages from any conversation).",
+    parameters: {
+      type: "object" as const,
+      properties: {
+        action: {
+          type: "string" as const,
+          enum: ["send_dm", "get_dms", "list_conversations", "send", "get_messages"],
+          description: "Action to perform",
+        },
+        to: {
+          type: "string" as const,
+          description: "Recipient DID for send_dm, or conversation DID for send/get_messages",
+        },
+        text: {
+          type: "string" as const,
+          description: "Message text to send",
+        },
+        replyTo: {
+          type: "string" as const,
+          description: "Message ID to reply to (optional)",
+        },
+        limit: {
+          type: "number" as const,
+          description: "Number of messages to fetch (default 20)",
+        },
+      },
+      required: ["action"],
+    },
+    async execute(
+      _id: string,
+      params: {
+        action: string;
+        to?: string;
+        text?: string;
+        replyTo?: string;
+        limit?: number;
+      },
+    ): Promise<ToolResult> {
+      try {
+        switch (params.action) {
+          case "send_dm": {
+            if (!params.to) return errorResult("'to' (recipient DID) is required");
+            if (!params.text) return errorResult("'text' is required");
+            const msg = await chat.sendDM(params.to, params.text, params.replyTo);
+            return jsonResult(msg);
+          }
+          case "get_dms": {
+            if (!params.to) return errorResult("'to' (recipient DID) is required");
+            const result = await chat.getDMs(params.to, { limit: params.limit || 20 });
+            if (!result.messages.length) return textResult("No DMs found");
+            return jsonResult({
+              messages: truncateResults(result.messages),
+              hasMore: result.hasMore,
+            });
+          }
+          case "list_conversations": {
+            const convs = await chat.listConversations();
+            if (!convs.length) return textResult("No conversations found");
+            return jsonResult(truncateResults(convs));
+          }
+          case "send": {
+            if (!params.to) return errorResult("'to' (conversation DID) is required");
+            if (!params.text) return errorResult("'text' is required");
+            const msg = await chat.sendMessage(params.to, params.text, {
+              replyToMessageId: params.replyTo,
+            });
+            return jsonResult(msg);
+          }
+          case "get_messages": {
+            if (!params.to) return errorResult("'to' (conversation DID) is required");
+            const result = await chat.getMessages(params.to, { limit: params.limit || 20 });
+            if (!result.messages.length) return textResult("No messages found");
+            return jsonResult({
+              messages: truncateResults(result.messages),
+              hasMore: result.hasMore,
+            });
+          }
+          default:
+            return errorResult(`Unknown action: ${params.action}`);
+        }
+      } catch (err: unknown) {
+        return errorResult(err instanceof Error ? err.message : String(err));
+      }
+    },
+  };
 }

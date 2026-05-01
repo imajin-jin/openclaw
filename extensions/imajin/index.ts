@@ -25,7 +25,9 @@ import {
   createFairTool,
   createDiscoverTool,
   createMediaTool,
+  createChatTool,
 } from "./src/tools.js";
+import { ImajinChat } from "./src/chat.js";
 
 export default definePluginEntry({
   id: "imajin",
@@ -55,7 +57,7 @@ export default definePluginEntry({
       keypairPath: config.keypairPath,
     });
 
-    // Register the five primitive tools + media
+    // Register the five primitive tools + media + chat
     api.registerTool(createIdentityTool(client));
     api.registerTool(createAttestTool(client));
     api.registerTool(createTransactTool(client));
@@ -63,10 +65,17 @@ export default definePluginEntry({
     api.registerTool(createDiscoverTool(client));
     api.registerTool(createMediaTool(client));
 
+    // Chat — requires keypair for auth
+    if (config.keypairPath) {
+      const agentDid = config.did || "";
+      const chat = new ImajinChat(client, agentDid);
+      api.registerTool(createChatTool(chat));
+    }
+
     // TODO: registerMemoryCorpusSupplement — agent's chain as searchable memory
     // TODO: registerHook("before_tool_call") — entity context decorator
     // TODO: registerService — background node connection + auth refresh
     // TODO: registerHttpRoute — webhook receiver for Imajin events
-    // TODO: registerChannel — Imajin chat as a messaging channel
+    // TODO: registerChannel — Imajin chat as a full messaging channel (receive + send)
   },
 });

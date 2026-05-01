@@ -352,7 +352,15 @@ export class ImajinClient {
     }
   }
 
-  // --- HTTP helpers ---
+  // --- HTTP helpers (public for chat/other modules) ---
+
+  async getRaw(path: string): Promise<Record<string, unknown>> {
+    return this.get(path);
+  }
+
+  async postRaw(path: string, body: unknown): Promise<Record<string, unknown>> {
+    return this.post(path, body);
+  }
 
   private async get(path: string): Promise<Record<string, unknown>> {
     const headers = await this.authHeaders();
