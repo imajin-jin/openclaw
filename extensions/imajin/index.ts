@@ -24,6 +24,7 @@ import {
   createTransactTool,
   createFairTool,
   createDiscoverTool,
+  createMediaTool,
 } from "./src/tools.js";
 
 export default definePluginEntry({
@@ -54,16 +55,18 @@ export default definePluginEntry({
       keypairPath: config.keypairPath,
     });
 
-    // Register the five primitive tools
+    // Register the five primitive tools + media
     api.registerTool(createIdentityTool(client));
     api.registerTool(createAttestTool(client));
     api.registerTool(createTransactTool(client));
     api.registerTool(createFairTool(client));
     api.registerTool(createDiscoverTool(client));
+    api.registerTool(createMediaTool(client));
 
     // TODO: registerMemoryCorpusSupplement — agent's chain as searchable memory
     // TODO: registerHook("before_tool_call") — entity context decorator
     // TODO: registerService — background node connection + auth refresh
     // TODO: registerHttpRoute — webhook receiver for Imajin events
+    // TODO: registerChannel — Imajin chat as a messaging channel
   },
 });

@@ -9,6 +9,7 @@
  * 5. imajin_discover  — search the network (people, events, market, stubs)
  */
 
+import { readFile } from "node:fs/promises";
 import type { ImajinClient } from "./client.js";
 
 type ToolContent = { type: "text"; text: string };
@@ -27,6 +28,11 @@ function errorResult(msg: string): ToolResult {
 
 function jsonResult(data: unknown): ToolResult {
   return textResult(JSON.stringify(data, null, 2));
+}
+
+function truncateResults(data: unknown[], max = 20): unknown[] {
+  if (data.length <= max) return data;
+  return [...data.slice(0, max), { _truncated: true, total: data.length, showing: max }];
 }
 
 // --- Tool definitions ---
@@ -248,10 +254,141 @@ export function createDiscoverTool(client: ImajinClient) {
       try {
         const results = await client.search(params.query, params.type);
         if (!results.length) return textResult(`No results found for: ${params.query}`);
-        return jsonResult(results);
+        return jsonResult(truncateResults(results));
       } catch (err: unknown) {
         return errorResult(err instanceof Error ? err.message : String(err));
       }
     },
   };
+}
+
+export function createMediaTool(client: ImajinClient) {
+  return {
+    name: "imajin_media",
+    label: "Imajin Media",
+    description:
+      "Upload, list, and retrieve media assets on the Imajin network. " +
+      "Actions: upload (upload a file from a local path), list (list assets with optional filters), " +
+      "get (get a single asset by ID).",
+    parameters: {
+      type: "object" as const,
+      properties: {
+        action: {
+          type: "string" as const,
+          enum: ["upload", "list", "get"],
+          description: "Action to perform",
+        },
+        path: {
+          type: "string" as const,
+          description: "Local file path to upload (for upload action)",
+        },
+        filename: {
+          type: "string" as const,
+          description: "Filename for the upload (defaults to basename of path)",
+        },
+        mimeType: {
+          type: "string" as const,
+          description: "MIME type (for upload, auto-detected from extension if omitted)",
+        },
+        context: {
+          type: "string" as const,
+          enum: ["profile", "chat", "events", "market", "bugs", "voice"],
+          description: "Upload context — determines access level and folder (for upload)",
+        },
+        assetId: {
+          type: "string" as const,
+          description: "Asset ID to retrieve (for get action)",
+        },
+        search: {
+          type: "string" as const,
+          description: "Search term for filtering assets (for list action)",
+        },
+        type: {
+          type: "string" as const,
+          enum: ["image", "audio", "video", "text"],
+          description: "Filter by media type (for list action)",
+        },
+        limit: {
+          type: "number" as const,
+          description: "Max results to return (for list, default 20)",
+        },
+      },
+      required: ["action"],
+    },
+    async execute(
+      _id: string,
+      params: {
+        action: string;
+        path?: string;
+        filename?: string;
+        mimeType?: string;
+        context?: string;
+        assetId?: string;
+        search?: string;
+        type?: string;
+        limit?: number;
+      },
+    ): Promise<ToolResult> {
+      try {
+        switch (params.action) {
+          case "upload": {
+            if (!params.path) return errorResult("'path' is required for upload");
+            const buffer = Buffer.from(await readFile(params.path));
+            const basename = params.path.split("/").pop() || "upload";
+            const filename = params.filename || basename;
+            const mime = params.mimeType || guessMime(filename);
+            const ctx = params.context ? { app: params.context } : undefined;
+            const asset = await client.uploadMedia(buffer, filename, mime, ctx);
+            return jsonResult(asset);
+          }
+          case "list": {
+            const result = await client.listMedia({
+              search: params.search,
+              type: params.type,
+              limit: params.limit || 20,
+            });
+            if (!result.assets.length) return textResult("No media assets found");
+            return jsonResult({ count: result.count, assets: truncateResults(result.assets) });
+          }
+          case "get": {
+            if (!params.assetId) return errorResult("'assetId' is required for get");
+            const asset = await client.getMedia(params.assetId);
+            if (!asset) return textResult(`Asset not found: ${params.assetId}`);
+            return jsonResult(asset);
+          }
+          default:
+            return errorResult(`Unknown action: ${params.action}`);
+        }
+      } catch (err: unknown) {
+        return errorResult(err instanceof Error ? err.message : String(err));
+      }
+    },
+  };
+}
+
+// --- MIME type inference from file extension ---
+
+const EXT_MIME: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+  ".ogg": "audio/ogg",
+  ".webm": "audio/webm",
+  ".mp4": "video/mp4",
+  ".mov": "video/quicktime",
+  ".pdf": "application/pdf",
+  ".md": "text/markdown",
+  ".txt": "text/plain",
+  ".json": "application/json",
+  ".csv": "text/csv",
+};
+
+function guessMime(filename: string): string {
+  const ext = filename.toLowerCase().match(/\.[a-z0-9]+$/)?.[0] ?? "";
+  return EXT_MIME[ext] || "application/octet-stream";
 }
