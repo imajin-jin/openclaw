@@ -6,6 +6,7 @@
  */
 
 import { readFile } from "node:fs/promises";
+import { sign, createPrivateKey } from "node:crypto";
 
 export interface ImajinClientConfig {
   nodeUrl: string;
@@ -118,21 +119,23 @@ export class ImajinClient {
   }
 
   /**
-   * Sign a hex-encoded challenge with the agent's Ed25519 private key.
-   * Uses @noble/ed25519 (same as the Imajin server).
+   * Sign a challenge string with the agent's Ed25519 private key.
+   * Uses Node's built-in crypto (no external dependencies).
+   * Accepts private key as hex or base58.
    */
-  private async signChallenge(challengeHex: string, privateKeyHex: string): Promise<string> {
-    // Dynamic import — @noble/ed25519 is ESM
-    const ed = await import("@noble/ed25519");
-    const { sha512 } = await import("@noble/hashes/sha2.js");
+  private signChallenge(challenge: string, privateKey: string): string {
+    const privKeyBytes = isHex(privateKey) ? hexToBytes(privateKey) : base58Decode(privateKey);
 
-    // Configure sha512 sync (same as server)
-    ed.etc.sha512Sync = (...m: Uint8Array[]) => sha512(ed.etc.concatBytes(...m));
+    // Wrap raw 32-byte Ed25519 seed in PKCS#8 DER envelope
+    const derPrefix = Buffer.from("302e020100300506032b657004220420", "hex");
+    const edKey = createPrivateKey({
+      key: Buffer.concat([derPrefix, Buffer.from(privKeyBytes)]),
+      format: "der",
+      type: "pkcs8",
+    });
 
-    const messageBytes = new TextEncoder().encode(challengeHex);
-    const privKeyBytes = hexToBytes(privateKeyHex);
-    const signature = await ed.signAsync(messageBytes, privKeyBytes);
-    return bytesToHex(signature);
+    const signature = sign(null, Buffer.from(challenge), edKey);
+    return bytesToHex(new Uint8Array(signature));
   }
 
   /**
@@ -169,7 +172,7 @@ export class ImajinClient {
     };
 
     // Step 2: Sign the challenge
-    const signature = await this.signChallenge(challenge, keypair.privateKey);
+    const signature = this.signChallenge(challenge, keypair.privateKey);
 
     // Step 3: Verify signature
     const verifyRes = await fetch(`${this.baseUrl}/auth/api/login/verify`, {
@@ -386,7 +389,7 @@ export class ImajinClient {
   }
 }
 
-// --- Hex utilities (same as Imajin server) ---
+// --- Encoding utilities ---
 
 function hexToBytes(hex: string): Uint8Array {
   const bytes = new Uint8Array(hex.length / 2);
@@ -400,4 +403,21 @@ function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
+
+function isHex(s: string): boolean {
+  return /^[0-9a-fA-F]+$/.test(s) && s.length % 2 === 0;
+}
+
+const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+function base58Decode(s: string): Uint8Array {
+  let n = 0n;
+  for (const c of s) {
+    const i = BASE58_ALPHABET.indexOf(c);
+    if (i < 0) throw new Error(`Invalid base58 character: ${c}`);
+    n = n * 58n + BigInt(i);
+  }
+  const hex = n.toString(16).padStart(64, "0");
+  return hexToBytes(hex);
 }
