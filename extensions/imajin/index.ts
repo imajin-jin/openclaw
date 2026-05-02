@@ -1,8 +1,11 @@
 /**
- * OpenClaw Imajin Plugin
+ * OpenClaw Imajin Channel Plugin
  *
- * Connects an OpenClaw agent to the Imajin network.
- * Registers tools for the five primitives: identity, attestation,
+ * Connects an OpenClaw agent to the Imajin network as a full messaging channel.
+ * Inbound messages via WebSocket create OpenClaw sessions; replies route back
+ * through Imajin chat.
+ *
+ * Also registers tools for the five primitives: identity, attestation,
  * attribution (.fair), settlement, and discovery.
  *
  * Config (openclaw.json):
@@ -16,7 +19,7 @@
  *   }
  */
 
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 import { ImajinClient } from "./src/client.js";
 import {
   createIdentityTool,
@@ -28,17 +31,26 @@ import {
   createChatTool,
 } from "./src/tools.js";
 import { ImajinChat } from "./src/chat.js";
-import { ImajinService } from "./src/service.js";
+import { setImajinPluginState } from "./src/state.js";
+import { setImajinRuntime } from "./src/runtime.js";
 
-export default definePluginEntry({
+export default defineBundledChannelEntry({
   id: "imajin",
-  name: "Imajin Network",
+  name: "Imajin",
   description:
-    "Connect to the Imajin sovereign identity and settlement network. " +
-    "Provides tools for identity lookup, attestations, .fair attribution, " +
+    "Imajin sovereign identity and settlement network. " +
+    "Provides messaging, identity lookup, attestations, .fair attribution, " +
     "MJNx/MJN settlement, and network discovery.",
-
-  register(api) {
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./channel-plugin-api.js",
+    exportName: "imajinPlugin",
+  },
+  runtime: {
+    specifier: "./src/runtime.js",
+    exportName: "setImajinRuntime",
+  },
+  registerFull(api) {
     const config = (api.pluginConfig ?? {}) as {
       nodeUrl?: string;
       did?: string;
@@ -58,7 +70,18 @@ export default definePluginEntry({
       keypairPath: config.keypairPath,
     });
 
-    // Register the five primitive tools + media + chat
+    // Store state for the channel plugin to access
+    const agentDid = config.did || "";
+    const chat = config.keypairPath ? new ImajinChat(client, agentDid) : null;
+    setImajinPluginState({
+      nodeUrl: config.nodeUrl,
+      did: config.did,
+      keypairPath: config.keypairPath,
+      client,
+      chat,
+    });
+
+    // Register the five primitive tools + media
     api.registerTool(createIdentityTool(client));
     api.registerTool(createAttestTool(client));
     api.registerTool(createTransactTool(client));
@@ -66,54 +89,9 @@ export default definePluginEntry({
     api.registerTool(createDiscoverTool(client));
     api.registerTool(createMediaTool(client));
 
-    // Chat — requires keypair for auth
-    if (config.keypairPath) {
-      const agentDid = config.did || "";
-      const chat = new ImajinChat(client, agentDid);
+    // Chat tool — requires keypair for auth
+    if (chat) {
       api.registerTool(createChatTool(chat));
-
-      // Background WebSocket service — receive inbound messages (#848)
-      const service = new ImajinService({
-        client,
-        chat,
-        config: {
-          nodeUrl: config.nodeUrl,
-          agentDid,
-        },
-        logger: {
-          info: (msg) => api.logger.info(msg),
-          warn: (msg) => api.logger.warn(msg),
-          error: (msg) => api.logger.error(msg),
-          debug: (msg) => api.logger.debug?.(msg),
-        },
-        injector: {
-          enqueue: async (params) => {
-            const result = await api.enqueueNextTurnInjection({
-              sessionKey: params.sessionKey,
-              text: params.text,
-              idempotencyKey: params.idempotencyKey,
-              placement: "append_context",
-              ttlMs: 300_000, // 5 minute TTL
-            });
-            return { enqueued: result.enqueued };
-          },
-        },
-      });
-
-      api.registerService({
-        id: "imajin-ws",
-        start: async () => {
-          await service.start();
-        },
-        stop: async () => {
-          await service.stop();
-        },
-      });
     }
-
-    // TODO: registerMemoryCorpusSupplement — agent's chain as searchable memory
-    // TODO: registerHook("before_tool_call") — entity context decorator
-    // TODO: registerChannel — Imajin chat as a full messaging channel (#849)
-    // TODO: registerHttpRoute — webhook receiver for Imajin events
   },
 });

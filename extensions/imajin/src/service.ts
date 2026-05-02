@@ -2,7 +2,8 @@
  * Imajin Background WebSocket Service
  *
  * Maintains a persistent WebSocket connection to the Imajin node.
- * Routes inbound messages into OpenClaw sessions via next-turn injection.
+ * Emits inbound messages via the `onMessage` callback for the channel
+ * plugin's inbound handler to dispatch.
  *
  * Auth flow:
  * 1. Authenticate via Ed25519 challenge-response → session cookie
@@ -16,6 +17,7 @@
 
 import type { ImajinClient } from "./client.js";
 import type { ImajinChat } from "./chat.js";
+import type { ImajinInboundMessage } from "./types.js";
 
 export interface ImajinServiceConfig {
   nodeUrl: string;
@@ -27,14 +29,6 @@ export interface ImajinServiceLogger {
   warn: (msg: string) => void;
   error: (msg: string) => void;
   debug?: (msg: string) => void;
-}
-
-export interface ImajinServiceInjector {
-  enqueue: (params: {
-    sessionKey: string;
-    text: string;
-    idempotencyKey?: string;
-  }) => Promise<{ enqueued: boolean }>;
 }
 
 /**
@@ -71,7 +65,6 @@ export class ImajinService {
   private chat: ImajinChat;
   private config: ImajinServiceConfig;
   private logger: ImajinServiceLogger;
-  private injector: ImajinServiceInjector;
 
   private reconnectDelay = MIN_RECONNECT_DELAY;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -84,18 +77,19 @@ export class ImajinService {
   private sentMessageIds = new Set<string>();
   private sentMessageCleanupTimer: ReturnType<typeof setInterval> | null = null;
 
+  /** Called for each inbound message (after self-echo filtering). */
+  onMessage?: (message: ImajinInboundMessage) => void | Promise<void>;
+
   constructor(params: {
     client: ImajinClient;
     chat: ImajinChat;
     config: ImajinServiceConfig;
     logger: ImajinServiceLogger;
-    injector: ImajinServiceInjector;
   }) {
     this.client = params.client;
     this.chat = params.chat;
     this.config = params.config;
     this.logger = params.logger;
-    this.injector = params.injector;
   }
 
   async start(): Promise<void> {
@@ -105,7 +99,6 @@ export class ImajinService {
 
     // Periodically clean old sent message IDs (keep for 2 minutes)
     this.sentMessageCleanupTimer = setInterval(() => {
-      // Simple approach: clear all every 2 min. Messages echo back within seconds.
       if (this.sentMessageIds.size > 100) {
         this.sentMessageIds.clear();
       }
@@ -123,7 +116,6 @@ export class ImajinService {
    */
   trackSentMessage(messageId: string): void {
     this.sentMessageIds.add(messageId);
-    // Auto-cleanup after 60s
     setTimeout(() => this.sentMessageIds.delete(messageId), 60_000);
   }
 
@@ -133,10 +125,8 @@ export class ImajinService {
     if (this.stopped) return;
 
     try {
-      // Step 1: Ensure authenticated
       await this.client.authenticate();
 
-      // Step 2: Get WS token
       const wsToken = await this.getWsToken();
       if (!wsToken) {
         this.logger.error("[imajin-ws] Failed to get WS token");
@@ -144,11 +134,9 @@ export class ImajinService {
         return;
       }
 
-      // Step 3: Build WS URL
       const wsUrl = this.buildWsUrl();
       this.logger.info(`[imajin-ws] Connecting to ${wsUrl}`);
 
-      // Step 4: Connect
       const ws = new WebSocket(wsUrl);
       this.ws = ws;
 
@@ -172,7 +160,9 @@ export class ImajinService {
         this.logger.error(`[imajin-ws] WebSocket error: ${String(event)}`);
       });
     } catch (err) {
-      this.logger.error(`[imajin-ws] Connection failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.error(
+        `[imajin-ws] Connection failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
       this.scheduleReconnect();
     }
   }
@@ -196,7 +186,6 @@ export class ImajinService {
       await this.connect();
     }, this.reconnectDelay);
 
-    // Exponential backoff
     this.reconnectDelay = Math.min(this.reconnectDelay * 2, MAX_RECONNECT_DELAY);
   }
 
@@ -228,25 +217,24 @@ export class ImajinService {
         break;
 
       case "error":
-        this.logger.error(`[imajin-ws] Server error: ${(event as { message?: string }).message}`);
+        this.logger.error(
+          `[imajin-ws] Server error: ${(event as { message?: string }).message}`,
+        );
         break;
 
       case "pong":
-        // Expected response to ping
         break;
 
       case "new_message":
-        this.handleNewMessage(event as unknown as WsNewMessage);
+        void this.handleNewMessage(event as unknown as WsNewMessage);
         break;
 
       case "message_updated":
-        // Link previews, edits — ignore for now
         break;
 
       case "user_typing":
       case "user_stop_typing":
       case "user_presence":
-        // Ignore presence/typing for now
         break;
 
       default:
@@ -266,7 +254,6 @@ export class ImajinService {
       return;
     }
 
-    // Extract text content
     const text =
       typeof message.content === "string"
         ? message.content
@@ -274,52 +261,28 @@ export class ImajinService {
 
     if (!text.trim()) return;
 
-    // Resolve sender identity for context
-    let senderLabel = message.fromDid.slice(0, 20) + "…";
-    try {
-      const identity = await this.client.lookupIdentity(message.fromDid);
-      if (identity) {
-        senderLabel =
-          identity.handle ? `@${identity.handle}` :
-          identity.displayName ?? senderLabel;
-      }
-    } catch {
-      // Best-effort identity resolution
-    }
-
-    // Determine conversation type from DID
-    const isDm = message.conversationDid.includes(":dm:");
-    const chatType = isDm ? "direct" : "group";
-
-    // Build session key matching channel convention
-    const sessionKey = `agent:main:imajin:${chatType}:${message.conversationDid}`;
-
     this.logger.info(
-      `[imajin-ws] Inbound ${chatType} message from ${senderLabel} in ${message.conversationDid}`,
+      `[imajin-ws] Inbound message from ${message.fromDid} in ${message.conversationDid}`,
     );
 
-    // Inject into OpenClaw session
-    try {
-      const injectionText = [
-        `[Imajin ${chatType} message]`,
-        `From: ${senderLabel} (${message.fromDid})`,
-        `Conversation: ${message.conversationDid}`,
-        `Time: ${message.createdAt}`,
-        "",
-        text,
-        "",
-        `To reply, use the imajin_chat tool with action "send_dm" and recipientDid "${message.fromDid}".`,
-      ].join("\n");
-
-      await this.injector.enqueue({
-        sessionKey,
-        text: injectionText,
-        idempotencyKey: `imajin:msg:${message.id}`,
-      });
-    } catch (err) {
-      this.logger.error(
-        `[imajin-ws] Failed to inject message: ${err instanceof Error ? err.message : String(err)}`,
-      );
+    if (this.onMessage) {
+      try {
+        await this.onMessage({
+          id: message.id,
+          conversationDid: message.conversationDid,
+          fromDid: message.fromDid,
+          content: message.content,
+          contentType: message.contentType,
+          replyToMessageId: message.replyToMessageId,
+          replyToDid: message.replyToDid,
+          createdAt: message.createdAt,
+          signature: message.signature,
+        });
+      } catch (err) {
+        this.logger.error(
+          `[imajin-ws] onMessage handler failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
   }
 
@@ -347,7 +310,6 @@ export class ImajinService {
       );
     }
 
-    // Schedule periodic refresh
     if (!this.subscriptionTimer) {
       this.subscriptionTimer = setInterval(() => {
         this.subscribeToConversations();
