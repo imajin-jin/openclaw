@@ -1,7 +1,7 @@
 {
   "id": "imajin",
   "activation": {
-    "onStartup": false
+    "onStartup": true
   },
   "uiHints": {
     "nodeUrl": {

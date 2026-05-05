@@ -10,8 +10,8 @@
  */
 
 import { readFile } from "node:fs/promises";
-import type { ImajinClient } from "./client.js";
 import type { ImajinChat } from "./chat.js";
+import type { ImajinClient } from "./client.js";
 
 type ToolContent = { type: "text"; text: string };
 type ToolResult = {
@@ -69,8 +69,8 @@ export function createIdentityTool(client: ImajinClient) {
             return jsonResult(identity);
           }
           case "connections": {
-            const connections = await client.getConnections(params.query);
-            if (!connections.length) return textResult(`No connections found for: ${params.query}`);
+            const connections = await client.getConnections();
+            if (!connections.length) return textResult("No connections yet.");
             return jsonResult(connections);
           }
           default:
@@ -217,7 +217,8 @@ export function createFairTool(client: ImajinClient) {
     async execute(_id: string, params: { transactionId: string }): Promise<ToolResult> {
       try {
         const manifest = await client.getFairManifest(params.transactionId);
-        if (!manifest) return textResult(`No .fair manifest found for transaction: ${params.transactionId}`);
+        if (!manifest)
+          return textResult(`No .fair manifest found for transaction: ${params.transactionId}`);
         return jsonResult(manifest);
       } catch (err: unknown) {
         return errorResult(err instanceof Error ? err.message : String(err));
@@ -248,10 +249,7 @@ export function createDiscoverTool(client: ImajinClient) {
       },
       required: ["query"],
     },
-    async execute(
-      _id: string,
-      params: { query: string; type?: string },
-    ): Promise<ToolResult> {
+    async execute(_id: string, params: { query: string; type?: string }): Promise<ToolResult> {
       try {
         const results = await client.search(params.query, params.type);
         if (!results.length) return textResult(`No results found for: ${params.query}`);
@@ -392,6 +390,108 @@ const EXT_MIME: Record<string, string> = {
 function guessMime(filename: string): string {
   const ext = filename.toLowerCase().match(/\.[a-z0-9]+$/)?.[0] ?? "";
   return EXT_MIME[ext] || "application/octet-stream";
+}
+
+// --- Connections tool ---
+
+export function createConnectionsTool(client: ImajinClient) {
+  return {
+    name: "imajin_connections",
+    label: "Imajin Connections",
+    description:
+      "Manage connections and invites on the Imajin network. " +
+      "Actions: list_invites (see pending/accepted invites and quota), " +
+      "create_invite (generate a shareable invite link or send an email invite), " +
+      "connections (list trust graph connections for a DID).",
+    parameters: {
+      type: "object" as const,
+      properties: {
+        action: {
+          type: "string" as const,
+          enum: ["list_invites", "create_invite", "connections"],
+          description: "Action to perform",
+        },
+        did: {
+          type: "string" as const,
+          description: "DID to list connections for (connections action)",
+        },
+        delivery: {
+          type: "string" as const,
+          enum: ["link", "email"],
+          description: "Invite delivery method (default: link)",
+        },
+        toEmail: {
+          type: "string" as const,
+          description: "Recipient email address (for email delivery)",
+        },
+        note: {
+          type: "string" as const,
+          description: "Personal note to include with the invite",
+        },
+        maxUses: {
+          type: "number" as const,
+          description: "Maximum number of times the invite link can be used (default: 1)",
+        },
+      },
+      required: ["action"],
+    },
+    async execute(
+      _id: string,
+      params: {
+        action: string;
+        did?: string;
+        delivery?: "link" | "email";
+        toEmail?: string;
+        note?: string;
+        maxUses?: number;
+      },
+    ): Promise<ToolResult> {
+      try {
+        switch (params.action) {
+          case "list_invites": {
+            const result = await client.listInvites();
+            if (!result.invites.length) {
+              return textResult(
+                `No invites yet. Tier: ${result.tier}, Remaining: ${result.remaining ?? "unlimited"}`,
+              );
+            }
+            return jsonResult({
+              tier: result.tier,
+              limit: result.limit,
+              pending: result.pending,
+              remaining: result.remaining,
+              invites: truncateResults(result.invites),
+            });
+          }
+          case "create_invite": {
+            if (params.delivery === "email" && !params.toEmail) {
+              return errorResult("'toEmail' is required for email invites");
+            }
+            const result = await client.createInvite({
+              delivery: params.delivery,
+              toEmail: params.toEmail,
+              note: params.note,
+              maxUses: params.maxUses,
+            });
+            return jsonResult({
+              url: result.url,
+              invite: result.invite,
+              remaining: result.remaining,
+            });
+          }
+          case "connections": {
+            const connections = await client.getConnections();
+            if (!connections.length) return textResult("No connections yet.");
+            return jsonResult(truncateResults(connections));
+          }
+          default:
+            return errorResult(`Unknown action: ${params.action}`);
+        }
+      } catch (err: unknown) {
+        return errorResult(err instanceof Error ? err.message : String(err));
+      }
+    },
+  };
 }
 
 // --- Chat tool ---

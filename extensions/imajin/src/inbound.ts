@@ -1,10 +1,11 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { dispatchInboundReplyWithBase } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import type { OutboundReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import type { ImajinInboundMessage, ResolvedImajinAccount } from "./types.js";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { getImajinRuntime } from "./runtime.js";
 import { getImajinChat, getImajinClient } from "./state.js";
+import { onMessageReceived, onMessageSent } from "./telemetry.js";
+import type { ImajinInboundMessage, ResolvedImajinAccount } from "./types.js";
 
 const CHANNEL_ID = "imajin" as const;
 
@@ -19,8 +20,8 @@ async function deliverImajinReply(params: {
   }
 
   const text = params.payload.text?.trim() ?? "";
-  const mediaUrls = params.payload.mediaUrls ??
-    (params.payload.mediaUrl ? [params.payload.mediaUrl] : []);
+  const mediaUrls =
+    params.payload.mediaUrls ?? (params.payload.mediaUrl ? [params.payload.mediaUrl] : []);
 
   if (text && mediaUrls.length > 0) {
     await chat.sendMessage(params.target, `${text}\n\n${mediaUrls.join("\n")}`);
@@ -45,13 +46,14 @@ export async function handleImajinInbound(params: {
 
   // Extract text content
   const rawBody =
-    typeof message.content === "string"
-      ? message.content
-      : message.content?.text ?? "";
+    typeof message.content === "string" ? message.content : (message.content?.text ?? "");
 
   if (!rawBody.trim()) {
     return;
   }
+
+  // Telemetry: start inference bracket
+  onMessageReceived(undefined, message.fromDid, CHANNEL_ID);
 
   statusSink?.({ lastInboundAt: Date.now() });
 
@@ -63,9 +65,7 @@ export async function handleImajinInbound(params: {
     if (client) {
       const identity = await client.lookupIdentity(message.fromDid);
       if (identity) {
-        senderName =
-          identity.handle ? `@${identity.handle}` :
-          identity.displayName ?? senderName;
+        senderName = identity.handle ? `@${identity.handle}` : (identity.displayName ?? senderName);
       }
     }
   } catch {
@@ -126,11 +126,19 @@ export async function handleImajinInbound(params: {
     ctxPayload,
     core,
     deliver: async (payload) => {
-      await deliverImajinReply({
-        payload,
-        target: peerId,
-        accountId: account.accountId,
-      });
+      try {
+        await deliverImajinReply({
+          payload,
+          target: peerId,
+          accountId: account.accountId,
+        });
+        // Telemetry: end inference bracket (success)
+        onMessageSent(undefined, peerId, CHANNEL_ID, true);
+      } catch (err) {
+        // Telemetry: end inference bracket (failure)
+        onMessageSent(undefined, peerId, CHANNEL_ID, false);
+        throw err;
+      }
       statusSink?.({ lastOutboundAt: Date.now() });
     },
     onRecordError: (err) => {

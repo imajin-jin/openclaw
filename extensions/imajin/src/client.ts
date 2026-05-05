@@ -5,8 +5,8 @@
  * Signs challenges with the agent's keypair to get a session cookie.
  */
 
-import { readFile } from "node:fs/promises";
 import { sign, createPrivateKey } from "node:crypto";
+import { readFile } from "node:fs/promises";
 
 export interface ImajinClientConfig {
   nodeUrl: string;
@@ -24,6 +24,7 @@ interface Keypair {
 export interface ImajinIdentity {
   did: string;
   handle?: string;
+  name?: string;
   scope: string;
   subtype: string;
   displayName?: string;
@@ -110,7 +111,20 @@ export class ImajinClient {
       throw new Error("No keypairPath configured — cannot authenticate");
     }
     const raw = await readFile(this.keypairPath, "utf-8");
-    this.keypair = JSON.parse(raw) as Keypair;
+    const parsed = JSON.parse(raw);
+    // Handle both formats:
+    // 1. Flat: { did, privateKey, publicKey, publicKeyHex, ... }
+    // 2. Nested: { did, keypair: { privateKey, publicKey } }
+    if (parsed.keypair && parsed.keypair.privateKey) {
+      this.keypair = {
+        did: parsed.did,
+        publicKey: parsed.keypair.publicKey || "",
+        publicKeyHex: parsed.keypair.publicKey || "",
+        privateKey: parsed.keypair.privateKey,
+      };
+    } else {
+      this.keypair = parsed as Keypair;
+    }
     // Derive DID from keypair if not explicitly set
     if (!this.did) {
       this.did = this.keypair.did;
@@ -147,7 +161,11 @@ export class ImajinClient {
    */
   async authenticate(): Promise<void> {
     // Skip if session is still valid (with 5 min buffer)
-    if (this.sessionCookie && this.sessionExpiresAt && Date.now() < this.sessionExpiresAt - 300_000) {
+    if (
+      this.sessionCookie &&
+      this.sessionExpiresAt &&
+      Date.now() < this.sessionExpiresAt - 300_000
+    ) {
       return;
     }
 
@@ -223,18 +241,75 @@ export class ImajinClient {
   // --- Identity ---
 
   async lookupIdentity(query: string): Promise<ImajinIdentity | null> {
-    const res = await this.get(`/registry/api/identity/lookup?q=${encodeURIComponent(query)}`);
-    return (res as Record<string, unknown>).identity as ImajinIdentity ?? null;
+    const res = await this.get(`/auth/api/lookup/${encodeURIComponent(query)}`);
+    const data = res as Record<string, unknown>;
+    // The lookup endpoint returns fields at top level (did, handle, name, scope, subtype, tier)
+    if (data.did) return data as unknown as ImajinIdentity;
+    return (data.identity as ImajinIdentity) ?? null;
   }
 
   async getIdentity(did: string): Promise<ImajinIdentity | null> {
-    const res = await this.get(`/registry/api/identity/${encodeURIComponent(did)}`);
-    return (res as Record<string, unknown>).identity as ImajinIdentity ?? null;
+    const res = await this.get(`/auth/api/identity/${encodeURIComponent(did)}`);
+    return ((res as Record<string, unknown>).identity as ImajinIdentity) ?? null;
   }
 
-  async getConnections(did: string): Promise<ImajinIdentity[]> {
-    const res = await this.get(`/connections/api/connections/${encodeURIComponent(did)}`);
-    return ((res as Record<string, unknown>).connections as ImajinIdentity[]) ?? [];
+  async getConnections(
+    _did?: string,
+  ): Promise<
+    Array<{
+      did: string;
+      connectedAt: string;
+      handle: string | null;
+      name: string | null;
+      nickname: string | null;
+    }>
+  > {
+    // GET /connections/api/connections uses the authenticated user's DID (no param needed)
+    const res = await this.get(`/connections/api/connections`);
+    return (
+      ((res as Record<string, unknown>).connections as Array<{
+        did: string;
+        connectedAt: string;
+        handle: string | null;
+        name: string | null;
+        nickname: string | null;
+      }>) ?? []
+    );
+  }
+
+  // --- Connections / Invites ---
+
+  async createInvite(opts?: {
+    delivery?: "link" | "email";
+    toEmail?: string;
+    note?: string;
+    maxUses?: number;
+  }): Promise<{ invite: Record<string, unknown>; url: string; remaining?: number }> {
+    const body: Record<string, unknown> = {
+      delivery: opts?.delivery || "link",
+    };
+    if (opts?.toEmail) body.toEmail = opts.toEmail;
+    if (opts?.note) body.note = opts.note;
+    if (opts?.maxUses) body.maxUses = opts.maxUses;
+    const res = await this.post("/connections/api/invites", body);
+    return res as { invite: Record<string, unknown>; url: string; remaining?: number };
+  }
+
+  async listInvites(): Promise<{
+    invites: Record<string, unknown>[];
+    tier: string;
+    limit: number | null;
+    pending: number;
+    remaining: number | null;
+  }> {
+    const res = await this.get("/connections/api/invites");
+    return res as {
+      invites: Record<string, unknown>[];
+      tier: string;
+      limit: number | null;
+      pending: number;
+      remaining: number | null;
+    };
   }
 
   // --- Attestation ---
@@ -256,13 +331,20 @@ export class ImajinClient {
     const target = did ?? this.did;
     if (!target) throw new Error("No DID available for balance check");
     const res = await this.get(`/pay/api/balance/${encodeURIComponent(target)}`);
-    return ((res as Record<string, unknown>).balance as { mjnx: number; mjn: number }) ?? { mjnx: 0, mjn: 0 };
+    return (
+      ((res as Record<string, unknown>).balance as { mjnx: number; mjn: number }) ?? {
+        mjnx: 0,
+        mjn: 0,
+      }
+    );
   }
 
   async getTransactions(did?: string, limit = 20): Promise<ImajinTransaction[]> {
     const target = did ?? this.did;
     if (!target) throw new Error("No DID available for transaction lookup");
-    const res = await this.get(`/pay/api/transactions/${encodeURIComponent(target)}?limit=${limit}`);
+    const res = await this.get(
+      `/pay/api/transactions/${encodeURIComponent(target)}?limit=${limit}`,
+    );
     return ((res as Record<string, unknown>).transactions as ImajinTransaction[]) ?? [];
   }
 

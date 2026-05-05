@@ -1,13 +1,37 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-import { getImajinPluginState } from "./state.js";
 import { startImajinGatewayAccount } from "./gateway.js";
+import { getImajinPluginState } from "./state.js";
 import type { ResolvedImajinAccount } from "./types.js";
 
 const CHANNEL_ID = "imajin" as const;
+
+const MAX_RETRIES = 3;
+const RETRY_DELAYS = [2000, 4000, 8000]; // exponential backoff
+
+async function sendWithRetry(fn: () => Promise<void>, label: string): Promise<void> {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      await fn();
+      return;
+    } catch (err) {
+      const isLastAttempt = attempt === MAX_RETRIES;
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (isLastAttempt) {
+        console.error(`[imajin] ${label} failed after ${MAX_RETRIES + 1} attempts: ${errMsg}`);
+        throw err;
+      }
+      const delay = RETRY_DELAYS[attempt] ?? 8000;
+      console.warn(
+        `[imajin] ${label} attempt ${attempt + 1} failed (${errMsg}), retrying in ${delay}ms...`,
+      );
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+}
 
 const meta = {
   id: CHANNEL_ID,
@@ -95,7 +119,10 @@ export const imajinPlugin: ChannelPlugin<ResolvedImajinAccount> = createChatChan
       if (!chat) {
         throw new Error("Imajin chat not initialized");
       }
-      await chat.sendMessage(to, text);
+      await sendWithRetry(
+        () => chat.sendMessage(to, text).then(() => {}),
+        `sendText to ${to.slice(0, 30)}`,
+      );
       return attachChannelToResult(CHANNEL_ID, {
         messageId: `imajin-${Date.now()}`,
         chatId: to,
@@ -106,7 +133,10 @@ export const imajinPlugin: ChannelPlugin<ResolvedImajinAccount> = createChatChan
       if (!chat) {
         throw new Error("Imajin chat not initialized");
       }
-      await chat.sendMessage(to, mediaUrl ?? "");
+      await sendWithRetry(
+        () => chat.sendMessage(to, mediaUrl ?? "").then(() => {}),
+        `sendMedia to ${to.slice(0, 30)}`,
+      );
       return attachChannelToResult(CHANNEL_ID, {
         messageId: `imajin-${Date.now()}`,
         chatId: to,
