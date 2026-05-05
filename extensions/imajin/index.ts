@@ -24,7 +24,7 @@ import { ImajinChat } from "./src/chat.js";
 import { ImajinClient } from "./src/client.js";
 import { setImajinRuntime } from "./src/runtime.js";
 import { setImajinPluginState } from "./src/state.js";
-import { onMessageReceived, onMessageSent, onLifecycleStart } from "./src/telemetry.js";
+import { onLifecycleStart } from "./src/telemetry.js";
 import {
   createIdentityTool,
   createAttestTool,
@@ -98,35 +98,13 @@ export default defineBundledChannelEntry({
     }
 
     // -----------------------------------------------------------------------
-    // Telemetry hooks — bracket pattern correlates inbound → outbound to
-    // estimate inference duration. Foundation for agent pricing (#853).
+    // Telemetry — bracket pattern in inbound.ts correlates received → sent
+    // to estimate inference duration. Lifecycle event emitted here on init.
+    // Foundation for agent pricing (#853).
+    //
+    // TODO: When OpenClaw adds message:preprocessed and session:patch hooks,
+    // register them here via api.registerHook() for enrichment + config tracking.
     // -----------------------------------------------------------------------
-
-    // gateway_start — agent lifecycle boot
-    api.on("gateway_start", (_event, ctx) => {
-      const nodeUrl =
-        config.nodeUrl ??
-        (ctx.config?.plugins?.entries?.imajin?.config?.nodeUrl as string | undefined) ??
-        "";
-      onLifecycleStart(config.did || "", nodeUrl);
-    });
-
-    // message_received — start of inference bracket
-    api.on("message_received", (event, ctx) => {
-      if (ctx.channelId !== "imajin") return;
-      onMessageReceived(ctx.sessionKey, event.from, ctx.channelId);
-    });
-
-    // message_sent — end of inference bracket
-    api.on("message_sent", (event, ctx) => {
-      if (ctx.channelId !== "imajin") return;
-      onMessageSent(ctx.sessionKey, event.to, ctx.channelId, event.success);
-    });
-
-    // TODO: message:preprocessed hook does not exist in the current SDK.
-    // When added, wire it here for enrichment tracking.
-
-    // TODO: session:patch hook does not exist in the current SDK.
-    // When added, wire it here for session config change tracking.
+    onLifecycleStart(config.did || "", config.nodeUrl);
   },
 });
