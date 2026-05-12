@@ -14,7 +14,8 @@
 
 import type { ImajinClient, ImajinIdentity } from "./client.js";
 
-const HANDLE_PATTERN = /@([a-z][a-z0-9_-]{1,32})/gi;
+// Handle: leading letter, then 0–31 more of [a-z0-9_-]. Total 1–32 chars.
+const HANDLE_PATTERN = /@([a-z][a-z0-9_-]{0,31})/gi;
 const DEFAULT_MAX_LOOKUPS_PER_TURN = 5;
 const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const DEFAULT_CACHE_MAX = 256;
