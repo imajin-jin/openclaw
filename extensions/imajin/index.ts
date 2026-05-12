@@ -17,7 +17,9 @@
  */
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { ImajinChat } from "./src/chat.js";
 import { ImajinClient } from "./src/client.js";
+import { createEntityContextHook } from "./src/entity-context.js";
 import {
   createIdentityTool,
   createAttestTool,
@@ -27,7 +29,6 @@ import {
   createMediaTool,
   createChatTool,
 } from "./src/tools.js";
-import { ImajinChat } from "./src/chat.js";
 
 export default definePluginEntry({
   id: "imajin",
@@ -72,10 +73,14 @@ export default definePluginEntry({
       api.registerTool(createChatTool(chat));
     }
 
-    // TODO: registerMemoryCorpusSupplement — agent's chain as searchable memory
-    // TODO: registerHook("before_tool_call") — entity context decorator
-    // TODO: registerService — background node connection + auth refresh
-    // TODO: registerHttpRoute — webhook receiver for Imajin events
-    // TODO: registerChannel — Imajin chat as a full messaging channel (receive + send)
+    // Entity context decorator (#846 item 3): before each turn, scan the
+    // latest user message for @handles and resolve them via the Imajin
+    // identity graph. Resolved entries are prepended to the prompt so the
+    // model has DID/scope/subtype/tier before it answers.
+    api.on("before_prompt_build", createEntityContextHook(client, { logger: api.log }));
+
+    // TODO (#846 item 4): registerMemoryCorpusSupplement — agent's chain
+    // (attestations + transactions + connections) as a queryable corpus
+    // surfaced through memory_search.
   },
 });
