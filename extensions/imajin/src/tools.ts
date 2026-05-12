@@ -10,8 +10,8 @@
  */
 
 import { readFile } from "node:fs/promises";
-import type { ImajinClient } from "./client.js";
 import type { ImajinChat } from "./chat.js";
+import type { ImajinClient } from "./client.js";
 
 type ToolContent = { type: "text"; text: string };
 type ToolResult = {
@@ -217,7 +217,8 @@ export function createFairTool(client: ImajinClient) {
     async execute(_id: string, params: { transactionId: string }): Promise<ToolResult> {
       try {
         const manifest = await client.getFairManifest(params.transactionId);
-        if (!manifest) return textResult(`No .fair manifest found for transaction: ${params.transactionId}`);
+        if (!manifest)
+          return textResult(`No .fair manifest found for transaction: ${params.transactionId}`);
         return jsonResult(manifest);
       } catch (err: unknown) {
         return errorResult(err instanceof Error ? err.message : String(err));
@@ -248,10 +249,7 @@ export function createDiscoverTool(client: ImajinClient) {
       },
       required: ["query"],
     },
-    async execute(
-      _id: string,
-      params: { query: string; type?: string },
-    ): Promise<ToolResult> {
+    async execute(_id: string, params: { query: string; type?: string }): Promise<ToolResult> {
       try {
         const results = await client.search(params.query, params.type);
         if (!results.length) return textResult(`No results found for: ${params.query}`);
@@ -268,15 +266,25 @@ export function createMediaTool(client: ImajinClient) {
     name: "imajin_media",
     label: "Imajin Media",
     description:
-      "Upload, list, and retrieve media assets on the Imajin network. " +
+      "Upload, list, retrieve, and manage media assets on the Imajin network. " +
       "Actions: upload (upload a file from a local path), list (list assets with optional filters), " +
-      "get (get a single asset by ID).",
+      "get (get a single asset by ID), move-to-folder (move asset to a folder), " +
+      "set-access (change access level: public/private/conversation), " +
+      "grant-access (allow a specific DID), publish-as-article (publish asset as an article).",
     parameters: {
       type: "object" as const,
       properties: {
         action: {
           type: "string" as const,
-          enum: ["upload", "list", "get"],
+          enum: [
+            "upload",
+            "list",
+            "get",
+            "move-to-folder",
+            "set-access",
+            "grant-access",
+            "publish-as-article",
+          ],
           description: "Action to perform",
         },
         path: {
@@ -293,12 +301,58 @@ export function createMediaTool(client: ImajinClient) {
         },
         context: {
           type: "string" as const,
-          enum: ["profile", "chat", "events", "market", "bugs", "voice"],
+          enum: [
+            "profile",
+            "chat",
+            "events",
+            "market",
+            "bugs",
+            "voice",
+            "document",
+            "outreach",
+            "article",
+            "essay",
+          ],
           description: "Upload context — determines access level and folder (for upload)",
         },
         assetId: {
           type: "string" as const,
-          description: "Asset ID to retrieve (for get action)",
+          description:
+            "Asset ID (for get, move-to-folder, set-access, grant-access, publish-as-article)",
+        },
+        folderId: {
+          type: "string" as const,
+          description: "Folder ID to move asset into (for move-to-folder)",
+        },
+        access: {
+          type: "string" as const,
+          enum: ["public", "private", "conversation"],
+          description: "Access level to set (for set-access)",
+        },
+        did: {
+          type: "string" as const,
+          description: "DID to grant access to (for grant-access)",
+        },
+        slug: {
+          type: "string" as const,
+          description: "URL slug for the article (for publish-as-article)",
+        },
+        title: {
+          type: "string" as const,
+          description: "Article title (for publish-as-article)",
+        },
+        subtitle: {
+          type: "string" as const,
+          description: "Article subtitle (optional, for publish-as-article)",
+        },
+        description: {
+          type: "string" as const,
+          description: "Article description (optional, for publish-as-article)",
+        },
+        status: {
+          type: "string" as const,
+          enum: ["POSTED", "REVIEW", "DRAFT"],
+          description: "Article status (optional, defaults to POSTED, for publish-as-article)",
         },
         search: {
           type: "string" as const,
@@ -325,6 +379,14 @@ export function createMediaTool(client: ImajinClient) {
         mimeType?: string;
         context?: string;
         assetId?: string;
+        folderId?: string;
+        access?: string;
+        did?: string;
+        slug?: string;
+        title?: string;
+        subtitle?: string;
+        description?: string;
+        status?: string;
         search?: string;
         type?: string;
         limit?: number;
@@ -355,6 +417,40 @@ export function createMediaTool(client: ImajinClient) {
             if (!params.assetId) return errorResult("'assetId' is required for get");
             const asset = await client.getMedia(params.assetId);
             if (!asset) return textResult(`Asset not found: ${params.assetId}`);
+            return jsonResult(asset);
+          }
+          case "move-to-folder": {
+            if (!params.assetId) return errorResult("'assetId' is required for move-to-folder");
+            if (!params.folderId) return errorResult("'folderId' is required for move-to-folder");
+            const result = await client.moveMediaToFolder(params.assetId, params.folderId);
+            return jsonResult(result);
+          }
+          case "set-access": {
+            if (!params.assetId) return errorResult("'assetId' is required for set-access");
+            if (!params.access) return errorResult("'access' is required for set-access");
+            const asset = await client.setMediaAccess(
+              params.assetId,
+              params.access as "public" | "private" | "conversation",
+            );
+            return jsonResult(asset);
+          }
+          case "grant-access": {
+            if (!params.assetId) return errorResult("'assetId' is required for grant-access");
+            if (!params.did) return errorResult("'did' is required for grant-access");
+            const asset = await client.grantMediaAccess(params.assetId, params.did);
+            return jsonResult(asset);
+          }
+          case "publish-as-article": {
+            if (!params.assetId) return errorResult("'assetId' is required for publish-as-article");
+            if (!params.slug) return errorResult("'slug' is required for publish-as-article");
+            if (!params.title) return errorResult("'title' is required for publish-as-article");
+            const asset = await client.publishMediaAsArticle(params.assetId, {
+              slug: params.slug,
+              title: params.title,
+              subtitle: params.subtitle,
+              description: params.description,
+              status: (params.status as "POSTED" | "REVIEW" | "DRAFT") || "POSTED",
+            });
             return jsonResult(asset);
           }
           default:

@@ -17,6 +17,7 @@
  */
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { ImajinChat } from "./src/chat.js";
 import { ImajinClient } from "./src/client.js";
 import {
   createIdentityTool,
@@ -27,7 +28,6 @@ import {
   createMediaTool,
   createChatTool,
 } from "./src/tools.js";
-import { ImajinChat } from "./src/chat.js";
 
 export default definePluginEntry({
   id: "imajin",
@@ -42,6 +42,7 @@ export default definePluginEntry({
       nodeUrl?: string;
       did?: string;
       keypairPath?: string;
+      actAs?: string;
     };
 
     if (!config?.nodeUrl) {
@@ -55,6 +56,7 @@ export default definePluginEntry({
       nodeUrl: config.nodeUrl,
       did: config.did,
       keypairPath: config.keypairPath,
+      actAs: config.actAs,
     });
 
     // Register the five primitive tools + media + chat

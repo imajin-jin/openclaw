@@ -11,6 +11,7 @@ export interface ImajinClientConfig {
   nodeUrl: string;
   did?: string;
   keypairPath?: string;
+  actAs?: string;
 }
 
 interface Keypair {
@@ -88,6 +89,7 @@ export class ImajinClient {
   private baseUrl: string;
   private did?: string;
   private keypairPath?: string;
+  private actAs?: string;
   private keypair?: Keypair;
   private sessionCookie?: string;
   private sessionExpiresAt?: number;
@@ -96,6 +98,7 @@ export class ImajinClient {
     this.baseUrl = config.nodeUrl.replace(/\/$/, "");
     this.did = config.did;
     this.keypairPath = config.keypairPath;
+    this.actAs = config.actAs;
   }
 
   // --- Auth ---
@@ -144,7 +147,11 @@ export class ImajinClient {
    */
   async authenticate(): Promise<void> {
     // Skip if session is still valid (with 5 min buffer)
-    if (this.sessionCookie && this.sessionExpiresAt && Date.now() < this.sessionExpiresAt - 300_000) {
+    if (
+      this.sessionCookie &&
+      this.sessionExpiresAt &&
+      Date.now() < this.sessionExpiresAt - 300_000
+    ) {
       return;
     }
 
@@ -214,6 +221,9 @@ export class ImajinClient {
     if (this.did) {
       headers["X-Agent-DID"] = this.did;
     }
+    if (this.actAs) {
+      headers["X-Acting-As"] = this.actAs;
+    }
     return headers;
   }
 
@@ -221,12 +231,12 @@ export class ImajinClient {
 
   async lookupIdentity(query: string): Promise<ImajinIdentity | null> {
     const res = await this.get(`/registry/api/identity/lookup?q=${encodeURIComponent(query)}`);
-    return (res as Record<string, unknown>).identity as ImajinIdentity ?? null;
+    return ((res as Record<string, unknown>).identity as ImajinIdentity) ?? null;
   }
 
   async getIdentity(did: string): Promise<ImajinIdentity | null> {
     const res = await this.get(`/registry/api/identity/${encodeURIComponent(did)}`);
-    return (res as Record<string, unknown>).identity as ImajinIdentity ?? null;
+    return ((res as Record<string, unknown>).identity as ImajinIdentity) ?? null;
   }
 
   async getConnections(did: string): Promise<ImajinIdentity[]> {
@@ -253,13 +263,20 @@ export class ImajinClient {
     const target = did ?? this.did;
     if (!target) throw new Error("No DID available for balance check");
     const res = await this.get(`/pay/api/balance/${encodeURIComponent(target)}`);
-    return ((res as Record<string, unknown>).balance as { mjnx: number; mjn: number }) ?? { mjnx: 0, mjn: 0 };
+    return (
+      ((res as Record<string, unknown>).balance as { mjnx: number; mjn: number }) ?? {
+        mjnx: 0,
+        mjn: 0,
+      }
+    );
   }
 
   async getTransactions(did?: string, limit = 20): Promise<ImajinTransaction[]> {
     const target = did ?? this.did;
     if (!target) throw new Error("No DID available for transaction lookup");
-    const res = await this.get(`/pay/api/transactions/${encodeURIComponent(target)}?limit=${limit}`);
+    const res = await this.get(
+      `/pay/api/transactions/${encodeURIComponent(target)}?limit=${limit}`,
+    );
     return ((res as Record<string, unknown>).transactions as ImajinTransaction[]) ?? [];
   }
 
@@ -352,6 +369,60 @@ export class ImajinClient {
     }
   }
 
+  /**
+   * Move an asset to a folder (replaces all folder assignments).
+   */
+  async moveMediaToFolder(
+    assetId: string,
+    folderId: string,
+  ): Promise<{ assetId: string; folderIds: string[] }> {
+    return this.put(`/media/api/assets/${encodeURIComponent(assetId)}/folders`, {
+      folderIds: [folderId],
+    }) as Promise<{ assetId: string; folderIds: string[] }>;
+  }
+
+  /**
+   * Set the access level on an asset's .fair manifest.
+   * NOTE: Kernel endpoint PATCH /media/api/assets/[id]/access may not exist yet.
+   */
+  async setMediaAccess(
+    assetId: string,
+    access: "public" | "private" | "conversation",
+  ): Promise<MediaAsset> {
+    return this.patch(`/media/api/assets/${encodeURIComponent(assetId)}/access`, {
+      access,
+    }) as Promise<MediaAsset>;
+  }
+
+  /**
+   * Grant access to a specific DID on an asset (adds to .fair manifest allowedDids).
+   * NOTE: Kernel endpoint PATCH /media/api/assets/[id]/grants may not exist yet.
+   */
+  async grantMediaAccess(assetId: string, did: string): Promise<MediaAsset> {
+    return this.patch(`/media/api/assets/${encodeURIComponent(assetId)}/grants`, {
+      did,
+    }) as Promise<MediaAsset>;
+  }
+
+  /**
+   * Publish an asset as an article (adds metadata.article block).
+   * NOTE: Kernel endpoint PATCH /media/api/assets/[id]/article may not exist yet.
+   */
+  async publishMediaAsArticle(
+    assetId: string,
+    articleMeta: {
+      slug: string;
+      title: string;
+      subtitle?: string;
+      description?: string;
+      status?: "POSTED" | "REVIEW" | "DRAFT";
+    },
+  ): Promise<MediaAsset> {
+    return this.patch(`/media/api/assets/${encodeURIComponent(assetId)}/article`, {
+      article: articleMeta,
+    }) as Promise<MediaAsset>;
+  }
+
   // --- HTTP helpers (public for chat/other modules) ---
 
   async getRaw(path: string): Promise<Record<string, unknown>> {
@@ -376,6 +447,34 @@ export class ImajinClient {
     headers["Content-Type"] = "application/json";
     const res = await fetch(`${this.baseUrl}${path}`, {
       method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      throw new Error(`Imajin API ${res.status}: ${await res.text()}`);
+    }
+    return (await res.json()) as Record<string, unknown>;
+  }
+
+  private async put(path: string, body: unknown): Promise<Record<string, unknown>> {
+    const headers = await this.authHeaders();
+    headers["Content-Type"] = "application/json";
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      throw new Error(`Imajin API ${res.status}: ${await res.text()}`);
+    }
+    return (await res.json()) as Record<string, unknown>;
+  }
+
+  private async patch(path: string, body: unknown): Promise<Record<string, unknown>> {
+    const headers = await this.authHeaders();
+    headers["Content-Type"] = "application/json";
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method: "PATCH",
       headers,
       body: JSON.stringify(body),
     });
