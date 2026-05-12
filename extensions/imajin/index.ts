@@ -39,14 +39,18 @@ export default definePluginEntry({
     "MJNx/MJN settlement, and network discovery.",
 
   register(api) {
-    const config = api.getConfig() as {
+    // pluginConfig is the per-entry config block from openclaw.json
+    // (plugins.entries.imajin.config). The old code called api.getConfig()
+    // which is not on the plugin SDK surface — the whole plugin failed to
+    // register with TypeError before this fix.
+    const config = (api.pluginConfig ?? {}) as {
       nodeUrl?: string;
       did?: string;
       keypairPath?: string;
     };
 
     if (!config?.nodeUrl) {
-      api.log?.warn?.(
+      api.logger.warn(
         "Imajin plugin: no nodeUrl configured. Set plugins.entries.imajin.config.nodeUrl in openclaw.json",
       );
       return;
@@ -77,7 +81,7 @@ export default definePluginEntry({
     // latest user message for @handles and resolve them via the Imajin
     // identity graph. Resolved entries are prepended to the prompt so the
     // model has DID/scope/subtype/tier before it answers.
-    api.on("before_prompt_build", createEntityContextHook(client, { logger: api.log }));
+    api.on("before_prompt_build", createEntityContextHook(client, { logger: api.logger }));
 
     // TODO (#846 item 4): registerMemoryCorpusSupplement — agent's chain
     // (attestations + transactions + connections) as a queryable corpus
