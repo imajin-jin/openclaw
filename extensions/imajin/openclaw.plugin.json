@@ -1,0 +1,42 @@
+{
+  "id": "imajin",
+  "activation": {
+    "onStartup": false
+  },
+  "uiHints": {
+    "nodeUrl": {
+      "label": "Imajin Node URL",
+      "help": "URL of the Imajin node to connect to (e.g. https://jin.imajin.ai)",
+      "placeholder": "https://jin.imajin.ai"
+    },
+    "did": {
+      "label": "Agent DID",
+      "help": "The agent's decentralized identifier on the Imajin network",
+      "placeholder": "did:imajin:..."
+    },
+    "keypairPath": {
+      "label": "Keypair Path",
+      "help": "Path to the Ed25519 keypair JSON file for signing",
+      "sensitive": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "nodeUrl": {
+        "type": "string",
+        "description": "Imajin node URL"
+      },
+      "did": {
+        "type": "string",
+        "description": "Agent DID (did:imajin:...)"
+      },
+      "keypairPath": {
+        "type": "string",
+        "description": "Path to Ed25519 keypair JSON"
+      }
+    },
+    "required": ["nodeUrl"]
+  }
+}
