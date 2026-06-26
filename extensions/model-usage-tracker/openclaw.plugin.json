@@ -1,0 +1,29 @@
+{
+  "id": "model-usage-tracker",
+  "name": "Model Usage Tracker",
+  "description": "Records per-turn model/token usage to a JSONL log by listening on llm_output and reply_payload_sending hooks. Foundation for cost dashboards and the dev-harness cost curve.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "logPath": {
+        "type": "string",
+        "description": "Absolute path to the JSONL usage log. Defaults to <workspace>/memory/model-usage.jsonl"
+      },
+      "enabled": {
+        "type": "boolean",
+        "description": "Master toggle for usage recording (default true when plugin is active)"
+      }
+    }
+  },
+  "uiHints": {
+    "logPath": {
+      "label": "Usage Log Path",
+      "help": "Where to append per-turn usage rows (JSONL). Defaults to <workspace>/memory/model-usage.jsonl",
+      "placeholder": "/home/veteze/.openclaw/workspace/memory/model-usage.jsonl"
+    }
+  }
+}
