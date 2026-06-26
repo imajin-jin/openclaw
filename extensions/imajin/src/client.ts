@@ -436,14 +436,22 @@ export class ImajinClient {
 
   /**
    * Grant access to a specific DID on an asset (adds to .fair manifest allowedDids).
-   * NOTE: Kernel endpoint PATCH /media/api/assets/[id]/grants may not exist yet.
    */
   async grantMediaAccess(assetId: string, did: string, onBehalfOf?: string): Promise<MediaAsset> {
     return this.patch(
       `/media/api/assets/${encodeURIComponent(assetId)}/grants`,
-      {
-        did,
-      },
+      { add: [did] },
+      { onBehalfOf },
+    ) as Promise<MediaAsset>;
+  }
+
+  /**
+   * Revoke access from a specific DID on an asset (removes from .fair manifest allowedDids).
+   */
+  async revokeMediaAccess(assetId: string, did: string, onBehalfOf?: string): Promise<MediaAsset> {
+    return this.patch(
+      `/media/api/assets/${encodeURIComponent(assetId)}/grants`,
+      { remove: [did] },
       { onBehalfOf },
     ) as Promise<MediaAsset>;
   }
