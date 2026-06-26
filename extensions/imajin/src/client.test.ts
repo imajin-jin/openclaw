@@ -52,7 +52,7 @@ describe("ImajinClient media extensions", () => {
     expect(JSON.parse(init.body as string)).toEqual({ access: "public" });
   });
 
-  it("grantMediaAccess PATCHes a DID", async () => {
+  it("grantMediaAccess PATCHes { add: [did] }", async () => {
     global.fetch = mockFetch({ id: "asset_123", allowedDids: ["did:imajin:other"] });
     const result = await client.grantMediaAccess("asset_123", "did:imajin:other");
     expect(result).toEqual({ id: "asset_123", allowedDids: ["did:imajin:other"] });
@@ -62,7 +62,20 @@ describe("ImajinClient media extensions", () => {
     const init = calls[calls.length - 1][1] as RequestInit;
     expect(req).toBe(`${BASE_URL}/media/api/assets/asset_123/grants`);
     expect(init.method).toBe("PATCH");
-    expect(JSON.parse(init.body as string)).toEqual({ did: "did:imajin:other" });
+    expect(JSON.parse(init.body as string)).toEqual({ add: ["did:imajin:other"] });
+  });
+
+  it("revokeMediaAccess PATCHes { remove: [did] }", async () => {
+    global.fetch = mockFetch({ id: "asset_123", allowedDids: [] });
+    const result = await client.revokeMediaAccess("asset_123", "did:imajin:other");
+    expect(result).toEqual({ id: "asset_123", allowedDids: [] });
+
+    const calls = (global.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    const req = calls[calls.length - 1][0] as string;
+    const init = calls[calls.length - 1][1] as RequestInit;
+    expect(req).toBe(`${BASE_URL}/media/api/assets/asset_123/grants`);
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body as string)).toEqual({ remove: ["did:imajin:other"] });
   });
 
   it("publishMediaAsArticle PATCHes article metadata", async () => {
